@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# BigWig and large data files — download locally via example/download_bw.sh
+*.bw
+*.bigWig
+*.bigwig
+
+# Generated figures — exclude user output, but keep the committed example
+*.pdf
+!example/output.pdf
+*.svg
+
+# Python virtual environments
+.venv/
+env/
+venv/
