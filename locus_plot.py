@@ -216,6 +216,12 @@ def draw_genes(ax, track, chrom, start, end):
     ax.set_ylim(0, 1)
     ax.set_yticks([])
 
+    # Multiple transcripts of the same gene often overlap almost entirely in
+    # view; label each unique gene name once (centered on the union of its
+    # transcripts) instead of once per transcript, which produced illegible
+    # stacked/overlapping text.
+    name_spans = {}
+
     for cols in rows:
         tx_s = max(int(cols[1]), start)
         tx_e = min(int(cols[2]), end)
@@ -226,6 +232,11 @@ def draw_genes(ax, track, chrom, start, end):
         if name_field is not None and name_sep in name:
             parts = name.split(name_sep)
             name = parts[name_field] if name_field < len(parts) else name
+
+        if name:
+            prev = name_spans.get(name)
+            name_spans[name] = (tx_s, tx_e) if prev is None else \
+                (min(prev[0], tx_s), max(prev[1], tx_e))
 
         # Gene body line
         ax.plot([tx_s, tx_e], [y_mid, y_mid], color=color, lw=0.8, zorder=1)
@@ -255,11 +266,12 @@ def draw_genes(ax, track, chrom, start, end):
                         arrowprops=dict(arrowstyle="-|>", color=color,
                                         lw=0.5, mutation_scale=6), zorder=3)
 
-        # Gene name (italic, below — clip_on=False lets names extend into gap)
-        if name:
-            ax.text((tx_s + tx_e) / 2, y_mid - exon_h / 2 - 0.08, name,
-                    ha="center", va="top", fontsize=6.5,
-                    fontstyle="italic", color=color, clip_on=False)
+    # Gene name (italic, below — clip_on=False lets names extend into gap)
+    # One label per unique name, centered on the union of its transcripts.
+    for name, (name_s, name_e) in name_spans.items():
+        ax.text((name_s + name_e) / 2, y_mid - exon_h / 2 - 0.08, name,
+                ha="center", va="top", fontsize=6.5,
+                fontstyle="italic", color=color, clip_on=False)
 
 
 def draw_ticks(ax, track, chrom, start, end):
