@@ -9,7 +9,11 @@ Usage:
     python locus_plot.py --region chr17:18530000-18590000 \\
                          --config tracks.ini \\
                          --out figure.pdf \\
-                         [--width 8] [--height-per-unit 0.8] [--dpi 200]
+                         [--width 8] [--height-per-unit auto] [--dpi 200]
+
+--width also scales font sizes, line widths, and track heights up or down
+together (down to a minimum readable size below ~6.5in); see FONT_SIZES /
+set_scale() / auto_hpu() below.
 
 Track types (set with  type = ...):
     bigwig   — filled area signal from a BigWig file
@@ -46,6 +50,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.transforms import Bbox
 import pyBigWig
 import os
 
@@ -56,6 +61,116 @@ DEFAULT_BED_COLOR = "#888888"
 DEFAULT_GENE_COLOR = "#2244bb"
 HIGHLIGHT_COLOR = "#e8e8e8"
 COORD_AXIS_HEIGHT = 0.20   # height units for the coordinate axis
+
+# ── Size scaling ─────────────────────────────────────────────────────────────
+# Font sizes / line widths below are tuned for a figure at REF_WIDTH inches
+# (the historical default). Wider or narrower figures scale everything up or
+# down together via --width -- e.g. a poster-size figure gets bigger text,
+# a publication column gets smaller text. Each font role has a floor below
+# which it stops shrinking: pushing --width narrower than that trades away
+# layout (labels may overlap) rather than producing illegible type.
+REF_WIDTH = 8.0
+
+FONT_SIZES = {
+    "tiny":  5.5,   # y-range readout, bed/gene secondary annotations
+    "small": 6.5,   # coord-axis tick labels, gene name labels
+    "label": 7.0,   # track labels, scale bar label
+    "group": 7.5,   # group labels
+    "base":  8.0,   # default body text (rcParams)
+    "title": 9.0,   # chromosome label, figure title
+}
+FONT_FLOORS = {
+    "tiny":  4.5,
+    "small": 5.0,
+    "label": 5.5,
+    "group": 5.5,
+    "base":  6.0,
+    "title": 7.0,
+}
+LINE_WIDTHS = {
+    "hair":  0.4,   # zero line, strand arrows, spines
+    "thin":  0.5,   # coord-axis tick width, gene-body arrows
+    "med":   0.8,   # gene body line
+    "thick": 1.0,   # point-feature ticks
+    "bar":   1.5,   # scale bar
+}
+LINE_WIDTH_FLOOR = 0.3
+ARROW_SCALES = {"strand": 4, "gene": 6}
+ARROW_SCALE_FLOOR = 2.5
+
+DEFAULT_HPU = 0.8   # default inches per height unit, at REF_WIDTH
+HPU_FLOOR_RATIO = 0.6   # track height never auto-shrinks below 60% of default
+
+_SCALE = 1.0  # set once in main() from --width, via set_scale()
+
+
+def set_scale(width):
+    """Derive the global font/line-width scale factor from figure width.
+
+    Scales up as well as down around REF_WIDTH, so a wider figure gets
+    bigger, more legible text instead of staying frozen at the reference
+    size. Warns when a role's floor kicks in on the way down, since that's
+    the point where shrinking further starts costing legibility.
+    """
+    global _SCALE
+    _SCALE = width / REF_WIDTH
+    clamped = [r for r in FONT_SIZES if FONT_SIZES[r] * _SCALE < FONT_FLOORS[r]]
+    if _SCALE < HPU_FLOOR_RATIO:
+        clamped = clamped + ["track height"]
+    if clamped:
+        print(f"WARNING: --width {width:.2f}in scales {', '.join(clamped)} "
+              f"below their floor; holding at minimum readable size "
+              f"-- labels may overlap.", file=sys.stderr)
+    return _SCALE
+
+
+def auto_hpu():
+    """Inches per height unit, scaled with width like everything else (up or
+    down), down to HPU_FLOOR_RATIO of the default on the narrow end -- so a
+    narrow publication figure also gets shorter, instead of staying tall and
+    square. Overridden outright by an explicit --height-per-unit."""
+    return DEFAULT_HPU * max(_SCALE, HPU_FLOOR_RATIO)
+
+
+def FS(role):
+    return max(FONT_SIZES[role] * _SCALE, FONT_FLOORS[role])
+
+
+def LW(role):
+    return max(LINE_WIDTHS[role] * _SCALE, LINE_WIDTH_FLOOR)
+
+
+def AS(role):
+    return max(ARROW_SCALES[role] * _SCALE, ARROW_SCALE_FLOOR)
+
+
+LABEL_LINE_HEIGHT = 1.4   # rough line-height multiplier over font point size
+
+def annotation_font_role(track):
+    """Font role of the per-feature name labels a track draws inside its own
+    panel (gene names, bed feature names) -- distinct from the track's own
+    row label to its left. Returns None if the track draws no such labels,
+    in which case its configured height needs no adjustment."""
+    ttype = track.get("type", "bigwig").lower()
+    if ttype == "genes":
+        return "small"
+    if ttype == "bed":
+        show_names = track.get("show_names", "true").lower() != "false"
+        if show_names and "name_col" in track:
+            return "tiny"
+    return None
+
+
+def track_height_units(track, hpu):
+    """Configured height, plus extra room (converted from the scaled label
+    font size into height units) if the track draws names inside its panel
+    -- otherwise the configured height is used as-is."""
+    h = track["height"]
+    role = annotation_font_role(track)
+    if role is not None:
+        pad_inches = (FS(role) / 72.0) * LABEL_LINE_HEIGHT
+        h += pad_inches / hpu
+    return h
 
 
 # ── Parsing helpers ──────────────────────────────────────────────────────────
@@ -135,7 +250,7 @@ def draw_bigwig(ax, track, chrom, start, end):
     v_neg = np.where(v_fill < 0, v_fill, 0.0)
     ax.fill_between(x, 0, v_pos, color=color,     alpha=0.9, lw=0)
     ax.fill_between(x, 0, v_neg, color=neg_color, alpha=0.9, lw=0)
-    ax.axhline(0, color="black", lw=0.4)
+    ax.axhline(0, color="black", lw=LW("hair"))
 
     if "ylim" in track:
         ymin, ymax = [float(v) for v in track["ylim"].split(",")]
@@ -148,7 +263,7 @@ def draw_bigwig(ax, track, chrom, start, end):
     # Y-range text: "[0 – max]" in top-left corner of track (IGV style)
     range_str = f"[{ymin:.0f} – {ymax:.1f}]"
     ax.text(0.005, 0.97, range_str,
-            transform=ax.transAxes, fontsize=5.5, va="top", ha="left",
+            transform=ax.transAxes, fontsize=FS("tiny"), va="top", ha="left",
             color="grey", clip_on=True)
 
 
@@ -193,14 +308,14 @@ def draw_bed(ax, track, chrom, start, end):
                 dx = 0.004 * span * (1 if strand == "+" else -1)
                 ax.annotate("", xy=(xp + dx, y_mid), xytext=(xp, y_mid),
                             arrowprops=dict(arrowstyle="-|>", color="white",
-                                            lw=0.4, mutation_scale=4), zorder=3)
+                                            lw=LW("hair"), mutation_scale=AS("strand")), zorder=3)
 
         # Feature name
         if show_names and name_col is not None and len(cols) > name_col:
             name = cols[name_col]
             if (fe - fs) > 0.005 * span:
                 ax.text((fs + fe) / 2, y_mid - feat_h / 2 - 0.06, name,
-                        ha="center", va="top", fontsize=5.5,
+                        ha="center", va="top", fontsize=FS("tiny"),
                         color="#444444", clip_on=True, style="italic")
 
 
@@ -239,7 +354,7 @@ def draw_genes(ax, track, chrom, start, end):
                 (min(prev[0], tx_s), max(prev[1], tx_e))
 
         # Gene body line
-        ax.plot([tx_s, tx_e], [y_mid, y_mid], color=color, lw=0.8, zorder=1)
+        ax.plot([tx_s, tx_e], [y_mid, y_mid], color=color, lw=LW("med"), zorder=1)
 
         # Exon blocks (BED12: cols 10–11)
         if len(cols) >= 12 and cols[9].strip():
@@ -264,13 +379,13 @@ def draw_genes(ax, track, chrom, start, end):
             dx = 0.0035 * span * (1 if strand == "+" else -1)
             ax.annotate("", xy=(xp + dx, y_mid), xytext=(xp, y_mid),
                         arrowprops=dict(arrowstyle="-|>", color=color,
-                                        lw=0.5, mutation_scale=6), zorder=3)
+                                        lw=LW("thin"), mutation_scale=AS("gene")), zorder=3)
 
     # Gene name (italic, below — clip_on=False lets names extend into gap)
     # One label per unique name, centered on the union of its transcripts.
     for name, (name_s, name_e) in name_spans.items():
         ax.text((name_s + name_e) / 2, y_mid - exon_h / 2 - 0.08, name,
-                ha="center", va="top", fontsize=6.5,
+                ha="center", va="top", fontsize=FS("small"),
                 fontstyle="italic", color=color, clip_on=False)
 
 
@@ -281,7 +396,7 @@ def draw_ticks(ax, track, chrom, start, end):
     ax.set_yticks([])
     for cols in rows:
         xpos = (int(cols[1]) + int(cols[2])) / 2
-        ax.axvline(xpos, color=color, lw=1.0, ymin=0.1, ymax=0.9, zorder=2)
+        ax.axvline(xpos, color=color, lw=LW("thick"), ymin=0.1, ymax=0.9, zorder=2)
 
 
 # ── Decoration helpers ───────────────────────────────────────────────────────
@@ -315,11 +430,11 @@ def add_scalebar(ax, start, end, bar_bp, position="bottom"):
     y_text  = y_pos + (0.25 if position == "top" else 0.06)
     ax.plot([x_start, x_end], [y_pos, y_pos],
             transform=ax.get_xaxis_transform(),
-            color="black", lw=1.5, clip_on=False, solid_capstyle="butt")
+            color="black", lw=LW("bar"), clip_on=False, solid_capstyle="butt")
     label = f"{bar_bp // 1000} kb" if bar_bp >= 1000 else f"{bar_bp} bp"
     ax.text((x_start + x_end) / 2, y_text, label,
             transform=ax.get_xaxis_transform(),
-            ha="center", va="bottom", fontsize=7, color="black")
+            ha="center", va="bottom", fontsize=FS("label"), color="black")
 
 
 def add_coord_axis(ax, chrom, start, end, position="bottom"):
@@ -335,17 +450,17 @@ def add_coord_axis(ax, chrom, start, end, position="bottom"):
     ax.set_xticks(ticks)
     ax.set_xticklabels(
         [f"{t/1e6:.2f} Mb" if t >= 1e6 else f"{int(t/1e3)} kb" for t in ticks],
-        fontsize=6.5)
-    ax.xaxis.set_tick_params(length=3, width=0.5)
+        fontsize=FS("small"))
+    ax.xaxis.set_tick_params(length=max(3 * _SCALE, 2), width=LW("thin"))
     if position == "top":
         ax.xaxis.tick_top()
         ax.xaxis.set_label_position("top")
         ax.spines[["bottom", "right", "left"]].set_visible(False)
-        ax.spines["top"].set_linewidth(0.4)
+        ax.spines["top"].set_linewidth(LW("hair"))
     else:
         ax.spines[["top", "right", "left"]].set_visible(False)
-        ax.spines["bottom"].set_linewidth(0.4)
-    ax.set_xlabel(chrom, fontsize=9, fontweight="bold", labelpad=2)
+        ax.spines["bottom"].set_linewidth(LW("hair"))
+    ax.set_xlabel(chrom, fontsize=FS("title"), fontweight="bold", labelpad=2)
 
 
 def add_group_labels(fig, axes, tracks, left_x=0.01):
@@ -368,7 +483,7 @@ def add_group_labels(fig, axes, tracks, left_x=0.01):
         y_bot = pos_bot.y0
         y_mid = (y_top + y_bot) / 2
         fig.text(left_x, y_mid, gname,
-                 ha="center", va="center", fontsize=7.5, fontweight="bold",
+                 ha="center", va="center", fontsize=FS("group"), fontweight="bold",
                  rotation=90, transform=fig.transFigure)
 
 
@@ -384,16 +499,27 @@ def main():
     ap.add_argument("--out",     required=True,
                     help="Output file (.pdf, .svg, .png)")
     ap.add_argument("--width",   type=float, default=8,
-                    help="Figure width in inches (default 8)")
-    ap.add_argument("--height-per-unit", type=float, default=0.8, dest="hpu",
-                    help="Inches per height unit (default 0.8)")
+                    help="Figure width in inches (default 8). Also scales "
+                         "font sizes and line widths up or down with figure "
+                         "size -- larger for a poster, smaller for a "
+                         "publication column; below ~6.5in text holds at a "
+                         "minimum readable size and labels may start to "
+                         "overlap instead of shrinking further (a warning "
+                         "is printed when this happens)")
+    ap.add_argument("--height-per-unit", type=float, default=None, dest="hpu",
+                    help="Inches per height unit (default: auto, scales "
+                         "with --width like text does, down to 60%% of the "
+                         "0.8in default on the narrow end; pass a value to "
+                         "fix it explicitly)")
     ap.add_argument("--dpi",     type=int,   default=200)
     args = ap.parse_args()
+
+    set_scale(args.width)
 
     matplotlib.rcParams.update({
         "font.family":      "sans-serif",
         "font.sans-serif":  ["Arial", "Helvetica", "DejaVu Sans"],
-        "font.size":        8,
+        "font.size":        FS("base"),
         "pdf.fonttype":     42,
         "svg.fonttype":     "none",
     })
@@ -401,10 +527,14 @@ def main():
     chrom, start, end = parse_region(args.region)
     glb, tracks = load_config(args.config)
 
-    # Figure height: coord axis on top, then tracks
-    heights = [COORD_AXIS_HEIGHT] + [t["height"] for t in tracks]
-    fig_h = sum(heights) * args.hpu
-    fig_h = max(fig_h, 2.0)
+    # Figure height: coord axis on top, then tracks. hpu scales down with
+    # --width by default (see auto_hpu) so a narrower figure also gets
+    # shorter instead of staying tall and square; pass --height-per-unit
+    # explicitly to fix it regardless of width.
+    hpu = args.hpu if args.hpu is not None else auto_hpu()
+    heights = [COORD_AXIS_HEIGHT] + [track_height_units(t, hpu) for t in tracks]
+    fig_h = sum(heights) * hpu
+    fig_h = max(fig_h, 2.0 * max(_SCALE, HPU_FLOOR_RATIO))
 
     fig, axes = plt.subplots(
         len(tracks) + 1, 1,
@@ -440,7 +570,7 @@ def main():
         italic = track.get("italic_label", "false").lower() == "true"
         ax.text(-0.02, 0.5, label,
                 transform=ax.transAxes,
-                fontsize=7, ha="right", va="center",
+                fontsize=FS("label"), ha="right", va="center",
                 fontstyle="italic" if italic else "normal",
                 clip_on=False)
 
@@ -449,12 +579,20 @@ def main():
 
     # Title goes on the coord axis at the top
     if glb.get("title"):
-        axes[0].set_title(glb["title"], fontsize=9, fontweight="bold", pad=4)
+        axes[0].set_title(glb["title"], fontsize=FS("title"), fontweight="bold", pad=4)
 
     plt.subplots_adjust(hspace=0.02, left=0.25, right=0.97,
                         top=0.97, bottom=0.05)
 
-    fig.savefig(args.out, dpi=args.dpi, bbox_inches="tight")
+    # Trim excess top/bottom whitespace automatically, but lock the saved
+    # width to exactly --width -- a plain bbox_inches="tight" would instead
+    # grow the canvas to fit any overflowing labels, silently ignoring
+    # --width right when a narrow figure needs it most. Content that doesn't
+    # fit at the requested width is clipped instead.
+    fig.canvas.draw()
+    tight = fig.get_tightbbox(fig.canvas.get_renderer())
+    final_bbox = Bbox.from_bounds(0, tight.y0, args.width, tight.height)
+    fig.savefig(args.out, dpi=args.dpi, bbox_inches=final_bbox)
     plt.close(fig)
     print(f"Saved → {args.out}")
 

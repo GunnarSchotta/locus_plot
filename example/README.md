@@ -63,12 +63,22 @@ python locus_plot.py \
 ```
 
 The committed [`output.pdf`](output.pdf) and [`output.png`](output.png) were generated
-with the default settings (`--width 8 --height-per-unit 0.8 --dpi 150`).
+with the default settings (`--width 8`, `--dpi 150`).
+
+[`output_compact.pdf`](output_compact.pdf) / [`output_compact.png`](output_compact.png)
+show the same locus at `--width 3.5` — a typical single-column journal width — to
+demonstrate the automatic font/line/track-height scaling described in the main
+[README](../README.md#figure-sizing):
+
+```bash
+python locus_plot.py --region chr8:127700000-128050000 \
+    --config example/tracks.ini --out example/output_compact.pdf --width 3.5
+```
 
 ### Optional variations
 
 ```bash
-# Wider figure for a two-column layout
+# Wider figure for a poster or two-column layout — text and tracks scale up too
 python locus_plot.py --region chr8:127700000-128050000 \
     --config example/tracks.ini --out example/output_wide.pdf --width 12
 
@@ -89,5 +99,7 @@ python locus_plot.py --region chr8:127730000-127745000 \
 | [`data/repeats.bed`](data/repeats.bed) | Representative repeat elements (LINE, SINE, LTR) |
 | [`data/peaks.bed`](data/peaks.bed) | H3K27ac peak regions, categorised by cell-line specificity |
 | [`data/ctcf_sites.bed`](data/ctcf_sites.bed) | CTCF binding sites (rendered as tick marks) |
-| [`output.pdf`](output.pdf) | Pre-generated vector figure |
+| [`output.pdf`](output.pdf) | Pre-generated vector figure (`--width 8`, default) |
 | [`output.png`](output.png) | Pre-generated raster figure (150 dpi) |
+| [`output_compact.pdf`](output_compact.pdf) | Pre-generated vector figure at a publication column width (`--width 3.5`) |
+| [`output_compact.png`](output_compact.png) | Same, as a raster PNG |

@@ -8,9 +8,10 @@ __pycache__/
 *.bigWig
 *.bigwig
 
-# Generated figures — exclude user output, but keep the committed example
+# Generated figures — exclude user output, but keep the committed examples
 *.pdf
 !example/output.pdf
+!example/output_compact.pdf
 *.svg
 
 # Python virtual environments

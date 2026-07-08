@@ -46,6 +46,9 @@ Or with pip (requires a working libBigWig on your system):
 pip install numpy matplotlib pyBigWig
 ```
 
+> **Windows users:** `pyBigWig` does not build on native Windows. Run `locus_plot.py`
+> inside WSL (Windows Subsystem for Linux) or use the conda install above from within WSL.
+
 ---
 
 ## Quick start
@@ -66,12 +69,36 @@ python locus_plot.py \
 | `--region` | *(required)* | Genomic region, e.g. `chr17:18,530,000-18,590,000` |
 | `--config` | *(required)* | Path to the INI track configuration file |
 | `--out` | *(required)* | Output file path; extension sets format: `.pdf`, `.svg`, or `.png` |
-| `--width` | `8` | Figure width in inches |
-| `--height-per-unit` | `0.8` | Inches per track height unit |
+| `--width` | `8` | Figure width in inches. The saved file is always exactly this wide. Also scales font sizes, line widths, and track heights up or down — see [Figure sizing](#figure-sizing) |
+| `--height-per-unit` | auto | Inches per track height unit. By default scales with `--width` like everything else; pass a value to fix it regardless of width |
 | `--dpi` | `200` | Raster DPI (PNG only) |
 
 Commas in the region string are ignored, so `chr17:18,530,000-18,590,000` and
 `chr17:18530000-18590000` are equivalent.
+
+---
+
+## Figure sizing
+
+Font sizes, line widths, and track heights are all tuned for `--width 8` and scale
+together from there — a wider `--width` (e.g. for a poster) gets bigger, easier-to-read
+text and taller tracks; a narrower one (e.g. for a journal column) gets smaller text and
+shorter tracks. The saved file's width always matches `--width` exactly, in every format.
+
+Below about `--width 6.5`, text and track heights stop shrinking and hold at a minimum
+readable size — a warning is printed naming what got clamped. Pushing `--width` narrower
+than that trades away layout (labels may start to overlap or clip) rather than producing
+illegible type. [`example/output_compact.pdf`](example/output_compact.pdf) below shows a
+typical single-column journal width (3.5 in), already past that point — the text is at
+its floor and still fully legible:
+
+![compact example figure](example/output_compact.png)
+
+Tracks that draw per-feature name labels inside their own panel (`type = genes`, or
+`type = bed` with `show_names` on and `name_col` set) automatically get a bit of extra
+height to fit those labels, scaled with the same factor as the text. Tracks without such
+labels (`bigwig`, `ticks`, or a `bed` track with `show_names = false`) keep exactly the
+height you configure.
 
 ---
 
@@ -167,8 +194,12 @@ height     = 0.5
 
 - Use **PDF or SVG** for vector graphics suitable for journal submission.
 - `--dpi 300` is conventional for PNG submission; `--dpi 72` is fine for presentations.
-- Adjust `--height-per-unit` (e.g. `0.6`) to compress the figure vertically for multi-panel layouts.
-- The left margin (`left=0.25` in `subplots_adjust`) is fixed; increase `--width` if long track labels are clipped.
+- Pass `--height-per-unit` explicitly (e.g. `0.6`) to compress the figure vertically
+  regardless of `--width`, instead of relying on the automatic scaling — see
+  [Figure sizing](#figure-sizing).
+- If track labels or titles are clipped, increase `--width` — below about `6.5in` text
+  holds at a minimum readable size rather than shrinking further, so very narrow figures
+  trade away layout instead of legibility.
 
 ---
 
