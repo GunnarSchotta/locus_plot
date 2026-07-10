@@ -20,6 +20,10 @@ Track types (set with  type = ...):
     bed      — rectangular feature annotations from a BED file
     genes    — gene/transcript structures from a BED12 file
     ticks    — vertical tick marks for point features (BED, uses col 2 as pos)
+    dynseq   — per-base score bigWig rendered as scaled/colored ACGT letters
+               (sequence looked up from a reference FASTA), falling back to
+               a plain filled signal view when zoomed out too far for
+               individual bases to be legible
 
 Global options in a [_global] section:
     highlight  = 18558000-18567000   # grey shaded column (region coords)
@@ -40,6 +44,11 @@ Track options (all optional except file and type):
     name_col    = 5                  # 1-based column for feature name labels
     strand_col  = 7                  # 1-based column for strand arrows (bed)
     show_names  = true               # whether to draw name labels (default true)
+    fasta       = /path/to/genome.fa # reference sequence for dynseq tracks
+    a_color     = #109648            # per-base letter color overrides (dynseq)
+    c_color     = #255C99
+    g_color     = #F7B32B
+    t_color     = #D62839
 """
 
 import argparse
@@ -50,8 +59,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.transforms import Bbox
+from matplotlib.textpath import TextPath
+from matplotlib.font_manager import FontProperties
+from matplotlib.transforms import Bbox, Affine2D
 import pyBigWig
+import pyfaidx
 import os
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -61,6 +73,11 @@ DEFAULT_BED_COLOR = "#888888"
 DEFAULT_GENE_COLOR = "#2244bb"
 HIGHLIGHT_COLOR = "#e8e8e8"
 COORD_AXIS_HEIGHT = 0.20   # height units for the coordinate axis
+NUCLEOTIDE_COLORS = {"A": "#109648", "C": "#255C99", "G": "#F7B32B", "T": "#D62839"}
+MIN_LETTER_WIDTH_IN = 0.05   # below this per-base width, letters aren't legible --
+                             # dynseq falls back to a filled signal view, like a
+                             # genome browser does when zoomed out
+AXES_LEFT, AXES_RIGHT = 0.25, 0.97   # must match subplots_adjust() margins in main()
 
 # ── Size scaling ─────────────────────────────────────────────────────────────
 # Font sizes / line widths below are tuned for a figure at REF_WIDTH inches
@@ -219,6 +236,21 @@ def fetch_bigwig(path, chrom, start, end, nbins=NBINS):
     return np.array([v if v is not None else np.nan for v in raw], dtype=float)
 
 
+def fetch_bigwig_values(path, chrom, start, end):
+    """Per-base-pair values (one per position), unlike fetch_bigwig's binned means."""
+    bw = pyBigWig.open(path)
+    vals = np.array(bw.values(chrom, start, end), dtype=float)
+    bw.close()
+    return vals
+
+
+def fetch_sequence(path, chrom, start, end):
+    fasta = pyfaidx.Fasta(path)
+    seq = str(fasta[chrom][start:end]).upper()
+    fasta.close()
+    return seq
+
+
 def parse_bed_region(path, chrom, start, end):
     rows = []
     try:
@@ -239,32 +271,38 @@ def parse_bed_region(path, chrom, start, end):
 
 # ── Track renderers ──────────────────────────────────────────────────────────
 
-def draw_bigwig(ax, track, chrom, start, end):
-    color     = track.get("color", DEFAULT_BW_COLOR)
-    neg_color = track.get("neg_color", "#d4d4d4")
-    vals  = fetch_bigwig(track["file"], chrom, start, end)
-    x     = np.linspace(start, end, len(vals))
-    v_fill = np.where(np.isnan(vals), 0, vals)
-
+def _draw_filled_signal(ax, x, v_fill, color, neg_color, ylim=None):
+    """Filled positive/negative area plot with zero line, y-limits, and the
+    IGV-style '[min – max]' range readout. Shared by the bigwig track and by
+    dynseq's zoomed-out fallback view."""
     v_pos = np.where(v_fill > 0, v_fill, 0.0)
     v_neg = np.where(v_fill < 0, v_fill, 0.0)
     ax.fill_between(x, 0, v_pos, color=color,     alpha=0.9, lw=0)
     ax.fill_between(x, 0, v_neg, color=neg_color, alpha=0.9, lw=0)
     ax.axhline(0, color="black", lw=LW("hair"))
 
-    if "ylim" in track:
-        ymin, ymax = [float(v) for v in track["ylim"].split(",")]
+    if ylim is not None:
+        ymin, ymax = ylim
     else:
-        ymax = float(np.nanmax(v_fill)) if np.any(~np.isnan(vals)) else 1.0
+        ymax = float(np.nanmax(v_fill)) if np.any(~np.isnan(v_fill)) else 1.0
         ymin = min(0.0, float(np.nanmin(v_fill)))
     ax.set_ylim(ymin, ymax * 1.05)
     ax.set_yticks([])
 
-    # Y-range text: "[0 – max]" in top-left corner of track (IGV style)
     range_str = f"[{ymin:.0f} – {ymax:.1f}]"
     ax.text(0.005, 0.97, range_str,
             transform=ax.transAxes, fontsize=FS("tiny"), va="top", ha="left",
             color="grey", clip_on=True)
+
+
+def draw_bigwig(ax, track, chrom, start, end):
+    color     = track.get("color", DEFAULT_BW_COLOR)
+    neg_color = track.get("neg_color", "#d4d4d4")
+    vals  = fetch_bigwig(track["file"], chrom, start, end)
+    x     = np.linspace(start, end, len(vals))
+    v_fill = np.where(np.isnan(vals), 0, vals)
+    ylim = tuple(float(v) for v in track["ylim"].split(",")) if "ylim" in track else None
+    _draw_filled_signal(ax, x, v_fill, color, neg_color, ylim)
 
 
 def draw_bed(ax, track, chrom, start, end):
@@ -387,6 +425,76 @@ def draw_genes(ax, track, chrom, start, end):
         ax.text((name_s + name_e) / 2, y_mid - exon_h / 2 - 0.08, name,
                 ha="center", va="top", fontsize=FS("small"),
                 fontstyle="italic", color=color, clip_on=False)
+
+
+_LETTER_FONT = FontProperties(family="monospace", weight="bold")
+_LETTER_PATHS = {}
+
+
+def _letter_path(letter):
+    """TextPath + bounding box for a glyph, normalized once and cached."""
+    if letter not in _LETTER_PATHS:
+        tp = TextPath((0, 0), letter, size=1, prop=_LETTER_FONT)
+        _LETTER_PATHS[letter] = (tp, tp.get_extents())
+    return _LETTER_PATHS[letter]
+
+
+def draw_letter(ax, letter, x_center, y_base, height, width, color, flip=False):
+    """Draw one glyph scaled to fill a (width x height) box anchored at
+    (x_center, y_base) -- height independent of width, unlike fontsize-based
+    text, since dynseq letter height encodes a score. flip=True mirrors the
+    glyph below y_base (dynseq's convention for negative scores)."""
+    if height <= 0:
+        return
+    tp, bbox = _letter_path(letter)
+    bbox_w = bbox.width or 1.0
+    bbox_h = bbox.height or 1.0
+    t = (Affine2D()
+         .translate(-bbox.x0 - bbox_w / 2, -bbox.y0)
+         .scale(width / bbox_w, (height / bbox_h) * (-1 if flip else 1))
+         .translate(x_center, y_base))
+    ax.add_patch(mpatches.PathPatch(tp.transformed(t), facecolor=color, edgecolor="none", lw=0, zorder=2))
+
+
+def draw_dynseq(ax, track, chrom, start, end):
+    color     = track.get("color", DEFAULT_BW_COLOR)
+    neg_color = track.get("neg_color", "#d4d4d4")
+    ylim = tuple(float(v) for v in track["ylim"].split(",")) if "ylim" in track else None
+
+    span = end - start
+    fig_width_in = _SCALE * REF_WIDTH
+    px_per_bp_in = fig_width_in * (AXES_RIGHT - AXES_LEFT) / span
+
+    if px_per_bp_in < MIN_LETTER_WIDTH_IN:
+        # Too zoomed out for legible letters -- fall back to a plain filled
+        # signal view, same as a genome browser does at low zoom.
+        vals = fetch_bigwig(track["file"], chrom, start, end)
+        x = np.linspace(start, end, len(vals))
+        v_fill = np.where(np.isnan(vals), 0, vals)
+        _draw_filled_signal(ax, x, v_fill, color, neg_color, ylim)
+        return
+
+    vals = fetch_bigwig_values(track["file"], chrom, start, end)
+    seq  = fetch_sequence(track["fasta"], chrom, start, end)
+    letter_colors = {b: track.get(f"{b.lower()}_color", NUCLEOTIDE_COLORS[b]) for b in "ACGT"}
+
+    if ylim is not None:
+        ymin, ymax = ylim
+    else:
+        finite = vals[np.isfinite(vals)]
+        ymax = float(finite.max()) if finite.size and finite.max() > 0 else 1.0
+        ymin = float(finite.min()) if finite.size and finite.min() < 0 else 0.0
+
+    ax.axhline(0, color="black", lw=LW("hair"))
+    ax.set_ylim(ymin * 1.05 if ymin < 0 else 0, ymax * 1.05)
+    ax.set_yticks([])
+
+    for i, base in enumerate(seq):
+        score = vals[i] if i < len(vals) else np.nan
+        if not np.isfinite(score) or score == 0 or base not in letter_colors:
+            continue
+        draw_letter(ax, base, start + i + 0.5, 0, abs(score), 0.9,
+                    letter_colors[base], flip=score < 0)
 
 
 def draw_ticks(ax, track, chrom, start, end):
@@ -554,6 +662,7 @@ def main():
         "bed":    draw_bed,
         "genes":  draw_genes,
         "ticks":  draw_ticks,
+        "dynseq": draw_dynseq,
     }
     for ax, track in zip(axes[1:], tracks):
         ttype = track.get("type", "bigwig").lower()
@@ -581,7 +690,7 @@ def main():
     if glb.get("title"):
         axes[0].set_title(glb["title"], fontsize=FS("title"), fontweight="bold", pad=4)
 
-    plt.subplots_adjust(hspace=0.02, left=0.25, right=0.97,
+    plt.subplots_adjust(hspace=0.02, left=AXES_LEFT, right=AXES_RIGHT,
                         top=0.97, bottom=0.05)
 
     # Trim excess top/bottom whitespace automatically, but lock the saved

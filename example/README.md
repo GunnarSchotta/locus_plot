@@ -103,3 +103,42 @@ python locus_plot.py --region chr8:127730000-127745000 \
 | [`output.png`](output.png) | Pre-generated raster figure (150 dpi) |
 | [`output_compact.pdf`](output_compact.pdf) | Pre-generated vector figure at a publication column width (`--width 3.5`) |
 | [`output_compact.png`](output_compact.png) | Same, as a raster PNG |
+
+---
+
+## Dynseq example — per-base importance scores at a CTCF site
+
+`type = dynseq` renders a per-base score BigWig as scaled, colored ACGT letters —
+e.g. for model contribution/importance scores (DeepLIFT, in-silico mutagenesis,
+BPNet/ChromBPNet-style output). This repo doesn't ship a trained model, so this
+example instead generates a **synthetic toy score** (a smooth bump plus a little
+noise, not a real model's output) at a 100 bp window inside the real, annotated
+`CTCF_1` site from [`data/ctcf_sites.bed`](data/ctcf_sites.bed)
+(hg38 chr8:127,729,875-127,729,975) — purely to show what the track type looks
+like. The sequence itself is the real hg38 reference. Swap `file` in
+[`tracks_dynseq.ini`](tracks_dynseq.ini) for your own per-base score BigWig to
+visualize real scores.
+
+![dynseq example output](dynseq_output.png)
+
+```bash
+# Step 1 — download the real hg38 chr8 reference (~140 MB; needed to look up
+# the base letter at each position). Excluded from git, see data/.gitignore.
+python example/fetch_fasta.py
+
+# Step 2 — generate the toy per-base score track
+python example/make_dynseq_scores.py
+
+# Step 3 — render the figure
+python locus_plot.py \
+    --region chr8:127729875-127729975 \
+    --config example/tracks_dynseq.ini \
+    --out example/dynseq_output.png --dpi 150
+```
+
+| File | Description |
+|------|-------------|
+| [`tracks_dynseq.ini`](tracks_dynseq.ini) | Track configuration for the dynseq example |
+| [`fetch_fasta.py`](fetch_fasta.py) | Downloads the hg38 chr8 reference FASTA from UCSC goldenPath |
+| [`make_dynseq_scores.py`](make_dynseq_scores.py) | Writes the synthetic toy per-base score BigWig |
+| [`dynseq_output.png`](dynseq_output.png) / [`.pdf`](dynseq_output.pdf) | Pre-generated figure |

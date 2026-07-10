@@ -16,6 +16,9 @@ output is a single vector (PDF/SVG) or raster (PNG) file, with no interactive GU
 - **BED annotation tracks** — rectangular features with optional per-feature colours and strand arrows
 - **Gene model tracks** — BED12 intron/exon structures with directional arrows and italic gene names
 - **Tick tracks** — vertical lines for point features (e.g. ChIP peaks, SNPs)
+- **Dynseq tracks** — per-base score BigWig rendered as scaled, colored ACGT
+  letters (e.g. model contribution/importance scores), falling back to a plain
+  signal view when zoomed out too far for individual bases to be legible
 - **Group labels** — bracket multiple tracks under a shared left-margin label
 - **Highlight column** — grey shaded region spanning all tracks
 - **Scale bar** — automatic kb/Mb label
@@ -32,18 +35,22 @@ output is a single vector (PDF/SVG) or raster (PNG) file, with no interactive GU
 | numpy   | ≥ 1.24         |
 | matplotlib | ≥ 3.7       |
 | pyBigWig | ≥ 0.3.22      |
+| pyfaidx | ≥ 0.7          |
+
+`pyfaidx` is only needed for `dynseq` tracks (it looks up the reference base at
+each position); the other track types don't touch it.
 
 Install with conda (recommended):
 
 ```bash
-conda create -n locus_plot python=3.11 numpy matplotlib pyBigWig -c conda-forge -c bioconda
+conda create -n locus_plot python=3.11 numpy matplotlib pyBigWig pyfaidx -c conda-forge -c bioconda
 conda activate locus_plot
 ```
 
 Or with pip (requires a working libBigWig on your system):
 
 ```bash
-pip install numpy matplotlib pyBigWig
+pip install numpy matplotlib pyBigWig pyfaidx
 ```
 
 > **Windows users:** `pyBigWig` does not build on native Windows. Run `locus_plot.py`
@@ -120,7 +127,7 @@ Section names beginning with `_` are reserved; all others become track labels.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `file` | *(required)* | Absolute or relative path to a BigWig or BED file |
-| `type` | `bigwig` | Track type: `bigwig`, `bed`, `genes`, or `ticks` |
+| `type` | `bigwig` | Track type: `bigwig`, `bed`, `genes`, `ticks`, or `dynseq` |
 | `height` | `1` | Relative track height (fractional values accepted, e.g. `0.3`) |
 | `label` | section name | Text displayed to the left of the track |
 | `color` | type-specific | Fill / feature colour as a hex code, e.g. `#2166ac` |
@@ -149,6 +156,38 @@ Section names beginning with `_` are reserved; all others become track labels.
 |-----|---------|-------------|
 | `name_sep` | `\|` | Separator used to split the name field when `name_field` is set |
 | `name_field` | — | 0-based index into the split name to use as the displayed gene name |
+
+#### Dynseq-specific options
+
+`dynseq` displays a per-base score BigWig (e.g. a model's per-nucleotide
+contribution/importance scores, positive or negative) as colored ACGT
+letters scaled to the score at each position, in the style of the
+[UCSC/WashU/Kundaje Lab dynseq track](https://pmc.ncbi.nlm.nih.gov/articles/PMC10015500/).
+Negative scores draw the letter flipped below the zero line. When the region
+is too wide for individual bases to be legible at the configured `--width`,
+the track automatically falls back to a plain filled signal view instead
+(same rendering as a `bigwig` track).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `fasta` | *(required)* | Reference genome FASTA (a `.fai` index is created next to it automatically if missing) |
+| `ylim` | auto | Y-axis limits as `min,max`, same as `bigwig` |
+| `a_color` | `#109648` | Letter color override for A |
+| `c_color` | `#255C99` | Letter color override for C |
+| `g_color` | `#F7B32B` | Letter color override for G |
+| `t_color` | `#D62839` | Letter color override for T |
+
+See [`example/README.md`](example/README.md#dynseq-example--per-base-importance-scores-at-a-ctcf-site)
+for a runnable dynseq example, including a script to fetch a real reference
+FASTA and a rendered figure.
+
+```ini
+[Contribution scores]
+type   = dynseq
+file   = data/model_scores.bw
+fasta  = data/hg38.fa
+height = 1.2
+```
 
 ---
 

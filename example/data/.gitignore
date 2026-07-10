@@ -4,3 +4,6 @@
 *.bigwig
 *.bigBed
 *.bigbed
+*.fa
+*.fa.fai
+*.fa.gz
