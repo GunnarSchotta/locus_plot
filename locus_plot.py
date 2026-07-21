@@ -320,6 +320,12 @@ def draw_bed(ax, track, chrom, start, end):
     ax.set_ylim(0, 1)
     ax.set_yticks([])
 
+    # Collect eligible feature-name labels and draw them after the main loop
+    # (below), so densely-packed features (e.g. ERV annotation) can have
+    # adjacent, colliding labels merged into one "name1/name2" label instead
+    # of drawing illegible overlapping text -- same fix as draw_genes.
+    label_items = []
+
     for cols in rows:
         fs = max(int(cols[1]), start)
         fe = min(int(cols[2]), end)
@@ -352,9 +358,57 @@ def draw_bed(ax, track, chrom, start, end):
         if show_names and name_col is not None and len(cols) > name_col:
             name = cols[name_col]
             if (fe - fs) > 0.005 * span:
-                ax.text((fs + fe) / 2, y_mid - feat_h / 2 - 0.06, name,
-                        ha="center", va="top", fontsize=FS("tiny"),
-                        color="#444444", clip_on=True, style="italic")
+                label_items.append((name, (fs, fe)))
+
+    for name, (name_s, name_e) in _merge_overlapping_labels(label_items, span, FS("tiny")):
+        ax.text((name_s + name_e) / 2, y_mid - feat_h / 2 - 0.06, name,
+                ha="center", va="top", fontsize=FS("tiny"),
+                color="#444444", clip_on=True, style="italic")
+
+
+_GENE_LABEL_FONT = FontProperties(family="sans-serif", style="italic")
+
+
+def _label_width_bp(text, fontsize_pt, bp_per_inch):
+    """Rendered width of a gene-name label, in bp at the current --width/zoom,
+    via TextPath's exact font metrics (coordinates in points at the given
+    size) -- no canvas draw needed, so this can run before layout/subplots_adjust."""
+    if not text:
+        return 0.0
+    width_pt = TextPath((0, 0), text, size=fontsize_pt, prop=_GENE_LABEL_FONT).get_extents().width
+    return (width_pt / 72.0) * bp_per_inch
+
+
+def _merge_overlapping_labels(items, span, fontsize_pt):
+    """Merge adjacent (name, (start, end)) labels whose rendered text would
+    collide on screen into a single combined label (e.g. "Sprr2a1/Sprr2a2")
+    instead of drawing two overlapping/garbled labels -- neither the genes
+    track nor the bed track stack labels onto a second row, so two features
+    close enough together previously collided illegibly. Shared by
+    draw_genes (gene names) and draw_bed (feature names, e.g. dense ERV
+    annotation). Returns a list of (name, (start, end)), sorted by position."""
+    items = sorted(items, key=lambda kv: (kv[1][0] + kv[1][1]) / 2)
+    if len(items) < 2:
+        return items
+
+    fig_width_in = _SCALE * REF_WIDTH
+    ax_width_in = fig_width_in * (AXES_RIGHT - AXES_LEFT)
+    bp_per_inch = span / ax_width_in if ax_width_in > 0 else 0.0
+    pad_bp = (4.0 / 72.0) * bp_per_inch  # ~4pt breathing room between labels
+
+    merged = [items[0]]
+    for name, (s, e) in items[1:]:
+        prev_name, (prev_s, prev_e) = merged[-1]
+        prev_center = (prev_s + prev_e) / 2
+        cur_center = (s + e) / 2
+        gap_needed = (_label_width_bp(prev_name, fontsize_pt, bp_per_inch) / 2
+                      + _label_width_bp(name, fontsize_pt, bp_per_inch) / 2
+                      + pad_bp)
+        if cur_center - prev_center < gap_needed:
+            merged[-1] = (f"{prev_name}/{name}", (min(prev_s, s), max(prev_e, e)))
+        else:
+            merged.append((name, (s, e)))
+    return merged
 
 
 def draw_genes(ax, track, chrom, start, end):
@@ -420,8 +474,10 @@ def draw_genes(ax, track, chrom, start, end):
                                         lw=LW("thin"), mutation_scale=AS("gene")), zorder=3)
 
     # Gene name (italic, below — clip_on=False lets names extend into gap)
-    # One label per unique name, centered on the union of its transcripts.
-    for name, (name_s, name_e) in name_spans.items():
+    # One label per unique name, centered on the union of its transcripts;
+    # adjacent names whose labels would collide on screen are merged into a
+    # single "name1/name2" label (see _merge_overlapping_labels).
+    for name, (name_s, name_e) in _merge_overlapping_labels(list(name_spans.items()), span, FS("small")):
         ax.text((name_s + name_e) / 2, y_mid - exon_h / 2 - 0.08, name,
                 ha="center", va="top", fontsize=FS("small"),
                 fontstyle="italic", color=color, clip_on=False)
